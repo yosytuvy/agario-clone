@@ -28,4 +28,10 @@ module.exports = {
     toggleMassState: 0,
     backgroundColor: '#f2fbff',
     lineColor: '#000000',
+    // Growth animation settings (always enabled)
+    growthAnimation: {
+        speed: 0.15,        // Animation speed (0.1 = slow, 0.3 = fast)
+        minSizeChange: 2,   // Minimum radius change to trigger animation
+        maxSizeChange: 50   // Maximum radius change to animate (prevents crazy big jumps)
+    }
 };

@@ -3,6 +3,8 @@ var render = require('./render');
 var ChatClient = require('./chat-client');
 var Canvas = require('./canvas');
 var global = require('./global');
+var AnimationManager = require('./animation-manager');
+
 
 var playerNameInput = document.getElementById('playerNameInput');
 var socket;
@@ -46,7 +48,94 @@ function validNick() {
     return regex.exec(playerNameInput.value) !== null;
 }
 
+// Settings Manager with localStorage
+var SettingsManager = {
+    // Default settings
+    defaults: {
+        borderDraw: false,
+        toggleMassState: 0,
+        continuity: false,
+        foodSides: 10,
+        darkMode: false
+    },
+    
+    // Load settings from localStorage
+    load: function() {
+        try {
+            var saved = localStorage.getItem('agarCloneSettings');
+            if (saved) {
+                var settings = JSON.parse(saved);
+                
+                // Apply to global variables
+                global.borderDraw = settings.borderDraw !== undefined ? settings.borderDraw : this.defaults.borderDraw;
+                global.toggleMassState = settings.toggleMassState !== undefined ? settings.toggleMassState : this.defaults.toggleMassState;
+                global.continuity = settings.continuity !== undefined ? settings.continuity : this.defaults.continuity;
+                global.foodSides = settings.foodSides !== undefined ? settings.foodSides : this.defaults.foodSides;
+                
+                // Apply dark mode
+                if (settings.darkMode) {
+                    global.backgroundColor = '#181818';
+                    global.lineColor = '#ffffff';
+                } else {
+                    global.backgroundColor = '#f2fbff';
+                    global.lineColor = '#000000';
+                }
+                
+                console.log('Settings loaded from localStorage:', settings);
+                return settings;
+            }
+        } catch (error) {
+            console.warn('Failed to load settings from localStorage:', error);
+        }
+        
+        // Return defaults if loading failed
+        return this.defaults;
+    },
+    
+    // Save settings to localStorage
+    save: function() {
+        try {
+            var settings = {
+                borderDraw: global.borderDraw,
+                toggleMassState: global.toggleMassState,
+                continuity: global.continuity,
+                foodSides: global.foodSides,
+                darkMode: global.backgroundColor === '#181818'
+            };
+            
+            localStorage.setItem('agarCloneSettings', JSON.stringify(settings));
+            console.log('Settings saved to localStorage:', settings);
+        } catch (error) {
+            console.warn('Failed to save settings to localStorage:', error);
+        }
+    },
+    
+    // Update checkbox states to match loaded settings
+    updateCheckboxes: function(settings) {
+        var visBord = document.getElementById('visBord');
+        var showMass = document.getElementById('showMass');
+        var continuity = document.getElementById('continuity');
+        var roundFood = document.getElementById('roundFood');
+        var darkMode = document.getElementById('darkMode');
+        
+        if (visBord) visBord.checked = settings.borderDraw;
+        if (showMass) showMass.checked = settings.toggleMassState === 1;
+        if (continuity) continuity.checked = settings.continuity;
+        if (roundFood) roundFood.checked = settings.foodSides === 10;
+        if (darkMode) darkMode.checked = settings.darkMode;
+    }
+};
+
+var animationManager = new AnimationManager();
+var lastCellSizes = new Map(); // cellId -> last known radius
+
 window.onload = function () {
+
+    // Load saved settings first
+    var savedSettings = SettingsManager.load();
+    
+    // Update checkboxes to match loaded settings
+    SettingsManager.updateCheckboxes(savedSettings);
 
     var btn = document.getElementById('startButton'),
         btnS = document.getElementById('spectateButton'),
@@ -124,16 +213,48 @@ window.canvas = new Canvas();
 window.chat = new ChatClient();
 
 var visibleBorderSetting = document.getElementById('visBord');
-visibleBorderSetting.onchange = settings.toggleBorder;
+visibleBorderSetting.onchange = function() {
+    global.borderDraw = this.checked;
+    SettingsManager.save();
+    console.log('Border setting changed to:', this.checked);
+};
 
 var showMassSetting = document.getElementById('showMass');
-showMassSetting.onchange = settings.toggleMass;
+showMassSetting.onchange = function() {
+    global.toggleMassState = this.checked ? 1 : 0;
+    SettingsManager.save();
+    console.log('Mass display changed to:', this.checked);
+};
 
 var continuitySetting = document.getElementById('continuity');
-continuitySetting.onchange = settings.toggleContinuity;
+continuitySetting.onchange = function() {
+    global.continuity = this.checked;
+    SettingsManager.save();
+    console.log('Continuity changed to:', this.checked);
+};
 
 var roundFoodSetting = document.getElementById('roundFood');
-roundFoodSetting.onchange = settings.toggleRoundFood;
+roundFoodSetting.onchange = function() {
+    global.foodSides = this.checked ? 10 : 5;
+    SettingsManager.save();
+    console.log('Round food changed to:', this.checked);
+};
+
+var darkModeSetting = document.getElementById('darkMode');
+if (darkModeSetting) {
+    darkModeSetting.onchange = function() {
+        if (this.checked) {
+            global.backgroundColor = '#181818';
+            global.lineColor = '#ffffff';
+            console.log('Dark mode enabled');
+        } else {
+            global.backgroundColor = '#f2fbff';
+            global.lineColor = '#000000';
+            console.log('Dark mode disabled');
+        }
+        SettingsManager.save();
+    };
+}
 
 var c = window.canvas.cv;
 var graph = c.getContext('2d');
@@ -313,52 +434,121 @@ function gameLoop() {
         graph.fillRect(0, 0, global.screen.width, global.screen.height);
 
         render.drawGrid(global, player, global.screen, graph);
+        
+        // Draw food
         foods.forEach(food => {
             let position = getPosition(food, player, global.screen);
             render.drawFood(position, food, graph);
         });
+        
+        // Draw fire food
         fireFood.forEach(fireFood => {
             let position = getPosition(fireFood, player, global.screen);
             render.drawFireFood(position, fireFood, playerConfig, graph);
         });
-        viruses.forEach(virus => {
-            let position = getPosition(virus, player, global.screen);
-            render.drawVirus(position, virus, graph);
-        });
 
-
-        let borders = { // Position of the borders on the screen
+        let borders = {
             left: global.screen.width / 2 - player.x,
             right: global.screen.width / 2 + global.game.width - player.x,
             top: global.screen.height / 2 - player.y,
             bottom: global.screen.height / 2 + global.game.height - player.y
         }
+
+        // Process cells and separate by size
+        var smallCells = [];  // Below splitMass (behind viruses)
+        var largeCells = [];  // Above splitMass (above viruses)
+
+        for (var i = 0; i < users.length; i++) {
+            let color = 'hsl(' + users[i].hue + ', 100%, 50%)';
+            let borderColor = 'hsl(' + users[i].hue + ', 100%, 45%)';
+            
+            for (var j = 0; j < users[i].cells.length; j++) {
+                const cell = users[i].cells[j];
+                const cellId = users[i].id + '_' + j;
+                
+                // Animation logic (if you implemented smooth growth)
+                const serverRadius = cell.radius;
+                const lastRadius = lastCellSizes.get(cellId);
+                let displayRadius = serverRadius;
+                
+                if (typeof animationManager !== 'undefined') {
+                    if (lastRadius !== undefined && Math.abs(serverRadius - lastRadius) > global.growthAnimation.minSizeChange) {
+                        displayRadius = animationManager.startGrowthAnimation(cellId, lastRadius, serverRadius);
+                    } else {
+                        displayRadius = animationManager.updateAndGetRadius(cellId, serverRadius);
+                    }
+                }
+                
+                lastCellSizes.set(cellId, serverRadius);
+                
+                const cellData = {
+                    color: color,
+                    borderColor: borderColor,
+                    mass: cell.mass,
+                    name: users[i].name,
+                    radius: displayRadius,
+                    serverRadius: serverRadius,
+                    x: cell.x - player.x + global.screen.width / 2,
+                    y: cell.y - player.y + global.screen.height / 2
+                };
+                
+                // Split based on mass threshold
+                const splitMassThreshold = 133; // Match your server config
+                
+                if (cell.mass >= splitMassThreshold) {
+                    largeCells.push(cellData);
+                } else {
+                    smallCells.push(cellData);
+                }
+            }
+        }
+
+        // Sort for proper layering
+        smallCells.sort(function (obj1, obj2) {
+            return obj1.mass - obj2.mass;
+        });
+        largeCells.sort(function (obj1, obj2) {
+            return obj1.mass - obj2.mass;
+        });
+
+        // LAYER 1: Draw small cells (behind viruses)
+        render.drawCells(smallCells, playerConfig, global.toggleMassState, borders, graph);
+
+        // LAYER 2: Draw viruses (above small cells, below large cells)
+        viruses.forEach(virus => {
+            let position = getPosition(virus, player, global.screen);
+            render.drawVirus(position, virus, graph);
+        });
+
+        // LAYER 3: Draw large cells (above viruses)
+        render.drawCells(largeCells, playerConfig, global.toggleMassState, borders, graph);
+
+        // Draw border last
         if (global.borderDraw) {
             render.drawBorder(borders, graph);
         }
 
-        var cellsToDraw = [];
-        for (var i = 0; i < users.length; i++) {
-            let color = 'hsl(' + users[i].hue + ', 100%, 50%)';
-            let borderColor = 'hsl(' + users[i].hue + ', 100%, 45%)';
-            for (var j = 0; j < users[i].cells.length; j++) {
-                cellsToDraw.push({
-                    color: color,
-                    borderColor: borderColor,
-                    mass: users[i].cells[j].mass,
-                    name: users[i].name,
-                    radius: users[i].cells[j].radius,
-                    x: users[i].cells[j].x - player.x + global.screen.width / 2,
-                    y: users[i].cells[j].y - player.y + global.screen.height / 2
+        // Cleanup animations periodically
+        if (Math.random() < 0.01) {
+            if (typeof animationManager !== 'undefined') {
+                animationManager.cleanup();
+            }
+            
+            const activeCellIds = new Set();
+            users.forEach(user => {
+                user.cells.forEach((cell, index) => {
+                    activeCellIds.add(user.id + '_' + index);
                 });
+            });
+            
+            for (let cellId of lastCellSizes.keys()) {
+                if (!activeCellIds.has(cellId)) {
+                    lastCellSizes.delete(cellId);
+                }
             }
         }
-        cellsToDraw.sort(function (obj1, obj2) {
-            return obj1.mass - obj2.mass;
-        });
-        render.drawCells(cellsToDraw, playerConfig, global.toggleMassState, borders, graph);
 
-        socket.emit('0', window.canvas.target); // playerSendTarget "Heartbeat".
+        socket.emit('0', window.canvas.target);
     }
 }
 

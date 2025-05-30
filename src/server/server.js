@@ -235,7 +235,7 @@ const tickPlayer = (currentPlayer) => {
     };
 
     const canEatVirus = (cell, cellCircle, virus) => {
-        return virus.mass < cell.mass && isEntityInsideCircle(virus, cellCircle)
+        return cell.mass > config.virus.splitMass && isEntityInsideCircle(virus, cellCircle)
     }
 
     const cellsToSplit = [];

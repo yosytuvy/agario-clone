@@ -118,7 +118,10 @@ exports.Player = class {
     }
 
     setLastSplit() {
-        this.timeToMerge = Date.now() + 1000 * MERGE_TIMER;
+        // this.timeToMerge = Date.now() + 1000 * MERGE_TIMER;
+        const avgMass = this.massTotal / this.cells.length;
+        const timerSeconds = 30 + (avgMass * 0.0233);
+        this.timeToMerge = Date.now() + 1000 * timerSeconds;
     }
 
     loseMassIfNeeded(massLossRate, defaultPlayerMass, minMassLoss) {
