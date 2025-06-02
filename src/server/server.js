@@ -17,6 +17,8 @@ const {getPosition} = require("./lib/entityUtils");
 
 let map = new mapUtils.Map(config);
 
+map.bots.initializeBots();
+
 let sockets = {};
 let spectators = [];
 const INIT_MASS_LOG = util.mathLog(config.defaultPlayerMass, config.slowBase);
@@ -265,6 +267,16 @@ const tickPlayer = (currentPlayer) => {
 
 const tickGame = () => {
     map.players.data.forEach(tickPlayer);
+
+    // Update bot AI
+    map.bots.updateAI(map.players.data, map.food.data, map.viruses.data);
+    
+    // Move bots
+    map.bots.data.forEach(bot => {
+        bot.move(config.slowBase, config.gameWidth, config.gameHeight, INIT_MASS_LOG);
+        tickBot(bot);
+    });
+
     map.massFood.move(config.gameWidth, config.gameHeight);
     map.viruses.move(config.gameWidth, config.gameHeight);
 
@@ -302,18 +314,105 @@ const tickGame = () => {
         }
     });
 
+     // Bot vs Bot collisions
+     map.bots.handleCollisions(function (gotEaten, eater) {
+        const cellGotEaten = map.bots.getCell(gotEaten.playerIndex, gotEaten.cellIndex);
+        map.bots.data[eater.playerIndex].changeCellMass(eater.cellIndex, cellGotEaten.mass);
+
+        const botDied = map.bots.removeCell(gotEaten.playerIndex, gotEaten.cellIndex);
+        if (botDied) {
+            let botGotEaten = map.bots.data[gotEaten.playerIndex];
+            io.emit('playerDied', { name: botGotEaten.name });
+            map.bots.removeBotByIndex(gotEaten.playerIndex);
+        }
+    });
+
+    // Bot vs Player collisions
+    map.bots.handlePlayerCollisions(map.players.data, function (gotEaten, eater) {
+        if (gotEaten.isPlayer) {
+            // Player got eaten by bot
+            const cellGotEaten = map.players.getCell(gotEaten.playerIndex, gotEaten.cellIndex);
+            map.bots.data[eater.playerIndex].changeCellMass(eater.cellIndex, cellGotEaten.mass);
+
+            const playerDied = map.players.removeCell(gotEaten.playerIndex, gotEaten.cellIndex);
+            if (playerDied) {
+                let playerGotEaten = map.players.data[gotEaten.playerIndex];
+                io.emit('playerDied', { name: playerGotEaten.name });
+                sockets[playerGotEaten.id].emit('RIP');
+                map.players.removePlayerByIndex(gotEaten.playerIndex);
+            }
+        } else {
+            // Bot got eaten by player
+            const cellGotEaten = map.bots.getCell(gotEaten.playerIndex, gotEaten.cellIndex);
+            map.players.data[eater.playerIndex].changeCellMass(eater.cellIndex, cellGotEaten.mass);
+
+            const botDied = map.bots.removeCell(gotEaten.playerIndex, gotEaten.cellIndex);
+            if (botDied) {
+                let botGotEaten = map.bots.data[gotEaten.playerIndex];
+                io.emit('playerDied', { name: botGotEaten.name });
+                map.bots.removeBotByIndex(gotEaten.playerIndex);
+            }
+        }
+    });
 };
 
-const calculateLeaderboard = () => {
-    const topPlayers = map.players.getTopPlayers();
+const tickBot = (currentBot) => {
+    const isEntityInsideCircle = (point, circle) => {
+        return SAT.pointInCircle(new Vector(point.x, point.y), circle);
+    };
 
-    if (leaderboard.length !== topPlayers.length) {
-        leaderboard = topPlayers;
+    const canEatVirus = (cell, cellCircle, virus) => {
+        return cell.mass > config.virus.splitMass && isEntityInsideCircle(virus, cellCircle)
+    }
+
+    const currentCell = currentBot.cells[0]; // Bots only have one cell
+    const cellCircle = currentCell.toCircle();
+
+    const eatenFoodIndexes = util.getIndexes(map.food.data, food => isEntityInsideCircle(food, cellCircle));
+    const eatenMassIndexes = util.getIndexes(map.massFood.data, mass => {
+        if (isEntityInsideCircle(mass, cellCircle)) {
+            return currentCell.mass > mass.mass * 1.1;
+        }
+        return false;
+    });
+    const eatenVirusIndexes = util.getIndexes(map.viruses.data, virus => canEatVirus(currentCell, cellCircle, virus));
+
+    // Bots can't split from viruses, they just get destroyed
+    if (eatenVirusIndexes.length > 0) {
+        map.viruses.delete(eatenVirusIndexes[0]);
+        // Bot dies from virus
+        const botIndex = map.bots.data.findIndex(b => b.id === currentBot.id);
+        if (botIndex >= 0) {
+            map.bots.removeBotByIndex(botIndex);
+        }
+        return;
+    }
+
+    let massGained = eatenMassIndexes.reduce((acc, index) => acc + map.massFood.data[index].mass, 0);
+    map.food.delete(eatenFoodIndexes);
+    map.massFood.remove(eatenMassIndexes);
+    massGained += (eatenFoodIndexes.length * config.foodMass);
+    currentBot.changeCellMass(0, massGained);
+};
+
+
+const calculateLeaderboard = () => {
+    // Combine players and bots for leaderboard
+    const allEntities = [
+        ...map.players.data.map(p => ({ id: p.id, name: p.name, massTotal: p.massTotal })),
+        ...map.bots.getBotsForLeaderboard()
+    ];
+    
+    allEntities.sort((a, b) => b.massTotal - a.massTotal);
+    const topEntities = allEntities.slice(0, 10);
+
+    if (leaderboard.length !== topEntities.length) {
+        leaderboard = topEntities;
         leaderboardChanged = true;
     } else {
         for (let i = 0; i < leaderboard.length; i++) {
-            if (leaderboard[i].id !== topPlayers[i].id) {
-                leaderboard = topPlayers;
+            if (leaderboard[i].id !== topEntities[i].id) {
+                leaderboard = topEntities;
                 leaderboardChanged = true;
                 break;
             }
@@ -322,9 +421,10 @@ const calculateLeaderboard = () => {
 }
 
 const gameloop = () => {
-    if (map.players.data.length > 0) {
+    if (map.players.data.length > 0 || map.bots.data.length > 0) {
         calculateLeaderboard();
         map.players.shrinkCells(config.massLossRate, config.defaultPlayerMass, config.minMassLoss);
+        map.bots.shrinkCells(config.massLossRate, config.defaultPlayerMass, config.minMassLoss);
     }
 
     map.balanceMass(config.foodMass, config.gameMass, config.maxFood, config.maxVirus);
@@ -358,7 +458,11 @@ const updateSpectator = (socketID) => {
         id: socketID,
         name: ''
     };
-    sockets[socketID].emit('serverTellPlayerMove', playerData, map.players.data, map.food.data, map.massFood.data, map.viruses.data);
+    
+    // Combine players and bots for spectator view
+    const allEntities = [...map.players.data, ...map.bots.data];
+    
+    sockets[socketID].emit('serverTellPlayerMove', playerData, allEntities, map.food.data, map.massFood.data, map.viruses.data);
     if (leaderboardChanged) {
         sendLeaderboard(sockets[socketID]);
     }

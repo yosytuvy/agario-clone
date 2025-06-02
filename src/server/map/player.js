@@ -77,8 +77,10 @@ class Cell {
         let response = new sat.Response();
         let colliding = sat.testCircleCircle(cellA.toCircle(), cellB.toCircle(), response);
         if (!colliding) return 0;
-        if (response.bInA) return 1;
-        if (response.aInB) return 2;
+        const eatThreshold = 1.25;
+    
+        if (response.bInA && cellA.mass > cellB.mass * eatThreshold) return 1;
+        if (response.aInB && cellB.mass > cellA.mass * eatThreshold) return 2;
         return 0;
     }
 }

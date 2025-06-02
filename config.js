@@ -19,6 +19,16 @@ module.exports = {
         splitSpeed:22,
         uniformDisposition: true,
 	},
+    bots: {
+        count: 20,
+        detectionRange: 200,
+        startMass: {
+            from: 20,
+            to: 200
+        },
+        maxMass: 1000, // Same as virus.splitMass
+        aiUpdateInterval: 3 // Update AI every 3 ticks for performance
+    },
     gameWidth: 5000,
     gameHeight: 5000,
     adminPass: "DEFAULT",
