@@ -266,6 +266,27 @@ const tickPlayer = (currentPlayer) => {
 const tickGame = () => {
     map.players.data.forEach(tickPlayer);
     map.massFood.move(config.gameWidth, config.gameHeight);
+    map.viruses.move(config.gameWidth, config.gameHeight);
+
+    const massFoodToRemove = [];
+    for (let massIndex = 0; massIndex < map.massFood.data.length; massIndex++) {
+        const mass = map.massFood.data[massIndex];
+        if (!mass || mass.speed <= 0) continue; // Skip stationary mass food
+        
+        for (let virusIndex = 0; virusIndex < map.viruses.data.length; virusIndex++) {
+            const virus = map.viruses.data[virusIndex];
+            const distance = Math.hypot(mass.x - virus.x, mass.y - virus.y);
+            
+            if (distance < mass.radius + virus.radius) {
+                map.viruses.feedVirus(virusIndex, mass.mass, mass.direction);
+                massFoodToRemove.push(massIndex);
+                break; // Mass food can only hit one virus
+            }
+        }
+    }
+
+    // Remove mass food that hit viruses
+    map.massFood.remove(massFoodToRemove);
 
     map.players.handleCollisions(function (gotEaten, eater) {
         const cellGotEaten = map.players.getCell(gotEaten.playerIndex, gotEaten.cellIndex);

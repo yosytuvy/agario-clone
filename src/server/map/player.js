@@ -3,6 +3,7 @@
 const util = require('../lib/util');
 const sat = require('sat');
 const gameLogic = require('../game-logic');
+const config = require('../../../config')
 
 const MIN_SPEED = 6.25;
 const SPLIT_CELL_SPEED = 20;
@@ -167,7 +168,11 @@ exports.Player = class {
     // The player will have the highest possible number of cells.
     virusSplit(cellIndexes, maxCells, defaultPlayerMass) {
         for (let cellIndex of cellIndexes) {
-            this.splitCell(cellIndex, maxCells - this.cells.length + 1, defaultPlayerMass);
+            if (this.cells.length < maxCells){
+                this.splitCell(cellIndex, maxCells - this.cells.length + 1, defaultPlayerMass);
+            }else{
+                this.cells[cellIndex].addMass(100)
+            }
         }
     }
 
