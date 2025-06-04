@@ -259,12 +259,12 @@ if (darkModeSetting) {
 var c = window.canvas.cv;
 var graph = c.getContext('2d');
 
-$("#feed").click(function () {
+document.getElementById("feed").addEventListener("click", () => {
     socket.emit('1');
     window.canvas.reenviar = false;
 });
 
-$("#split").click(function () {
+document.getElementById("split").addEventListener("click", () => {
     socket.emit('2');
     window.canvas.reenviar = false;
 });

@@ -26,7 +26,7 @@ module.exports = {
             from: 20,
             to: 200
         },
-        maxMass: 1000, // Same as virus.splitMass
+        maxMass: 1000,
         aiUpdateInterval: 3 // Update AI every 3 ticks for performance
     },
     gameWidth: 5000,
